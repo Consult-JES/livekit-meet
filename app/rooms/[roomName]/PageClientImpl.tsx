@@ -29,6 +29,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
+import { parseLaunchFragment, isRedirectLaunch, participantNameFromToken } from '@/lib/launch';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
@@ -55,6 +56,33 @@ export function PageClientImpl(props: {
     undefined,
   );
 
+  // Accredit gateway launch: the conferencing-gateway bakes the LiveKit JWT +
+  // ws_url (or a Zoom redirect) into the URL fragment. Detect it after mount
+  // (the fragment is client-only) and use that token directly, skipping the
+  // PreJoin -> /api/connection-details path. With no fragment, the standalone
+  // PreJoin/demo flow still works unchanged.
+  const [launchChecked, setLaunchChecked] = React.useState(false);
+  React.useEffect(() => {
+    const launch = parseLaunchFragment();
+    if (!launch) {
+      setLaunchChecked(true);
+      return;
+    }
+    if (isRedirectLaunch(launch)) {
+      window.location.href = launch.joinUrl;
+      return; // redirecting to the provider (Zoom); don't mount the room
+    }
+    const username = participantNameFromToken(launch.accessToken) ?? '';
+    setConnectionDetails({
+      serverUrl: launch.wsUrl,
+      participantToken: launch.accessToken,
+      roomName: props.roomName,
+      participantName: username,
+    });
+    setPreJoinChoices({ username, videoEnabled: true, audioEnabled: true });
+    setLaunchChecked(true);
+  }, [props.roomName]);
+
   const handlePreJoinSubmit = React.useCallback(async (values: LocalUserChoices) => {
     setPreJoinChoices(values);
     const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
@@ -72,13 +100,17 @@ export function PageClientImpl(props: {
   return (
     <main data-lk-theme="default" style={{ height: '100%' }}>
       {connectionDetails === undefined || preJoinChoices === undefined ? (
-        <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
-          <PreJoin
-            defaults={preJoinDefaults}
-            onSubmit={handlePreJoinSubmit}
-            onError={handlePreJoinError}
-          />
-        </div>
+        // Wait until the launch-fragment check has run so a gateway launch
+        // doesn't briefly flash the PreJoin screen before auto-joining.
+        launchChecked ? (
+          <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
+            <PreJoin
+              defaults={preJoinDefaults}
+              onSubmit={handlePreJoinSubmit}
+              onError={handlePreJoinError}
+            />
+          </div>
+        ) : null
       ) : (
         <VideoConferenceComponent
           connectionDetails={connectionDetails}
