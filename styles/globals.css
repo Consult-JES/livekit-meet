@@ -4,7 +4,8 @@
 
 html {
   color-scheme: dark;
-  background-color: #111;
+  /* Accredit dark (slate-900) */
+  background-color: #0f172a;
 }
 
 html,
@@ -13,6 +14,10 @@ body {
   width: 100%;
   height: 100%;
   margin: 0px;
+  /* Accredit brand font (Inter), with a system fallback stack so there is no
+     build-time or runtime font-fetch dependency. */
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
 }
 
 body {
@@ -32,7 +37,6 @@ body {
 }
 
 .header > h2 {
-  font-family: 'TWK Everett', sans-serif;
   font-style: normal;
   font-weight: 400;
   font-size: 1.25rem;
@@ -52,14 +56,15 @@ footer {
 
 footer a,
 h2 a {
-  color: #ff6352;
-  text-decoration-color: #a33529;
+  /* Accredit indigo accent (indigo-400, legible on dark) */
+  color: #818cf8;
+  text-decoration-color: #4f46e5;
   text-underline-offset: 0.125em;
 }
 
 footer a:hover,
 h2 a {
-  text-decoration-color: #ff6352;
+  text-decoration-color: #818cf8;
 }
 
 h2 a {
