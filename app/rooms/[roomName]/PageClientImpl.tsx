@@ -35,6 +35,7 @@ import {
   participantNameFromToken,
   type LaunchParams,
 } from '@/lib/launch';
+import toast from 'react-hot-toast';
 
 const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU == 'true';
 
@@ -204,8 +205,8 @@ function VideoConferenceComponent(props: {
         .then(() => {
           room.setE2EEEnabled(true).catch((e) => {
             if (e instanceof DeviceUnsupportedError) {
-              alert(
-                `You're trying to join an encrypted meeting, but your browser does not support it. Please update it to the latest version and try again.`,
+              toast.error(
+                `This encrypted meeting isn't supported by your browser. Please update it and try again.`,
               );
               console.error(e);
             } else {
@@ -237,19 +238,40 @@ function VideoConferenceComponent(props: {
   }, [router, props.returnUrl]);
   const handleError = React.useCallback((error: Error) => {
     console.error(error);
-    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
+    // Non-blocking toast — NEVER a blocking alert(): a native dialog freezes the
+    // whole call UI (and on a gateway launch the user can't easily recover).
+    toast.error(`Something went wrong: ${error.message}`);
   }, []);
   const handleEncryptionError = React.useCallback((error: Error) => {
     console.error(error);
-    alert(
-      `Encountered an unexpected encryption error, check the console logs for details: ${error.message}`,
-    );
+    toast.error(`Encryption error: ${error.message}`);
   }, []);
 
   React.useEffect(() => {
+    // Enable camera/mic ONLY when the gateway granted publish rights. A
+    // waiting-room participant (canPublish=false) must not auto-publish: LiveKit
+    // rejects it, and the resulting error would otherwise interrupt the user.
+    // They auto-enable the moment a host admits them — admission flips
+    // canPublish, firing ParticipantPermissionsChanged. Device failures here are
+    // non-fatal (e.g. no camera) and stay silent rather than blocking the call.
+    const enablePublishDevices = () => {
+      if (room.localParticipant.permissions?.canPublish === false) return;
+      if (props.userChoices.videoEnabled) {
+        room.localParticipant
+          .setCameraEnabled(true)
+          .catch((e) => console.warn('camera enable skipped:', e?.message ?? e));
+      }
+      if (props.userChoices.audioEnabled) {
+        room.localParticipant
+          .setMicrophoneEnabled(true)
+          .catch((e) => console.warn('microphone enable skipped:', e?.message ?? e));
+      }
+    };
+
     room.on(RoomEvent.Disconnected, handleOnLeave);
     room.on(RoomEvent.EncryptionError, handleEncryptionError);
     room.on(RoomEvent.MediaDevicesError, handleError);
+    room.on(RoomEvent.ParticipantPermissionsChanged, enablePublishDevices);
 
     if (e2eeSetupComplete) {
       room
@@ -258,24 +280,16 @@ function VideoConferenceComponent(props: {
           props.connectionDetails.participantToken,
           connectOptions,
         )
+        .then(enablePublishDevices)
         .catch((error) => {
           handleError(error);
         });
-      if (props.userChoices.videoEnabled) {
-        room.localParticipant.setCameraEnabled(true).catch((error) => {
-          handleError(error);
-        });
-      }
-      if (props.userChoices.audioEnabled) {
-        room.localParticipant.setMicrophoneEnabled(true).catch((error) => {
-          handleError(error);
-        });
-      }
     }
     return () => {
       room.off(RoomEvent.Disconnected, handleOnLeave);
       room.off(RoomEvent.EncryptionError, handleEncryptionError);
       room.off(RoomEvent.MediaDevicesError, handleError);
+      room.off(RoomEvent.ParticipantPermissionsChanged, enablePublishDevices);
     };
   }, [e2eeSetupComplete, room, props.connectionDetails, props.userChoices, handleOnLeave]);
 
