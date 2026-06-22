@@ -3,6 +3,7 @@
 import React from 'react';
 import { decodePassphrase } from '@/lib/client-utils';
 import { DebugMode } from '@/lib/Debug';
+import { HostControls } from '@/lib/HostControls';
 import { KeyboardShortcuts } from '@/lib/KeyboardShortcuts';
 import { RecordingIndicator } from '@/lib/RecordingIndicator';
 import { SettingsMenu } from '@/lib/SettingsMenu';
@@ -10,7 +11,6 @@ import { ConnectionDetails } from '@/lib/types';
 import {
   formatChatMessageLinks,
   LocalUserChoices,
-  PreJoin,
   RoomContext,
   VideoConference,
 } from '@livekit/components-react';
@@ -29,11 +29,16 @@ import {
 import { useRouter } from 'next/navigation';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
-import { parseLaunchFragment, isRedirectLaunch, participantNameFromToken } from '@/lib/launch';
+import {
+  parseLaunchFragment,
+  isRedirectLaunch,
+  participantNameFromToken,
+  type LaunchParams,
+} from '@/lib/launch';
 
-const CONN_DETAILS_ENDPOINT =
-  process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
 const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU == 'true';
+
+type LaunchState = 'pending' | 'invalid' | 'ready';
 
 export function PageClientImpl(props: {
   roomName: string;
@@ -45,90 +50,109 @@ export function PageClientImpl(props: {
   const [preJoinChoices, setPreJoinChoices] = React.useState<LocalUserChoices | undefined>(
     undefined,
   );
-  const preJoinDefaults = React.useMemo(() => {
-    return {
-      username: '',
-      videoEnabled: true,
-      audioEnabled: true,
-    };
-  }, []);
   const [connectionDetails, setConnectionDetails] = React.useState<ConnectionDetails | undefined>(
     undefined,
   );
+  const [launch, setLaunch] = React.useState<LaunchParams | undefined>(undefined);
 
   // Accredit gateway launch: the conferencing-gateway bakes the LiveKit JWT +
-  // ws_url (or a Zoom redirect) into the URL fragment. Detect it after mount
-  // (the fragment is client-only) and use that token directly, skipping the
-  // PreJoin -> /api/connection-details path. With no fragment, the standalone
-  // PreJoin/demo flow still works unchanged.
-  const [launchChecked, setLaunchChecked] = React.useState(false);
+  // ws_url (or a Zoom redirect) into the URL fragment. Accredit Meet ONLY serves
+  // gateway-launched rooms — there is no standalone PreJoin/demo path. A missing
+  // or malformed fragment yields a branded "invalid link" screen rather than an
+  // unauthenticated join form. The fragment is client-only, so detect on mount.
+  const [launchState, setLaunchState] = React.useState<LaunchState>('pending');
   React.useEffect(() => {
-    const launch = parseLaunchFragment();
-    if (!launch) {
-      setLaunchChecked(true);
+    const parsed = parseLaunchFragment();
+    if (!parsed) {
+      setLaunchState('invalid');
       return;
     }
-    if (isRedirectLaunch(launch)) {
-      window.location.href = launch.joinUrl;
+    if (isRedirectLaunch(parsed)) {
+      window.location.href = parsed.joinUrl;
       return; // redirecting to the provider (Zoom); don't mount the room
     }
-    const username = participantNameFromToken(launch.accessToken) ?? '';
+    const username = participantNameFromToken(parsed.accessToken) ?? '';
+    setLaunch(parsed);
     setConnectionDetails({
-      serverUrl: launch.wsUrl,
-      participantToken: launch.accessToken,
+      serverUrl: parsed.wsUrl,
+      participantToken: parsed.accessToken,
       roomName: props.roomName,
       participantName: username,
     });
-    setPreJoinChoices({ username, videoEnabled: true, audioEnabled: true });
-    setLaunchChecked(true);
+    setPreJoinChoices({
+      username,
+      videoEnabled: true,
+      audioEnabled: true,
+      videoDeviceId: '',
+      audioDeviceId: '',
+    });
+    setLaunchState('ready');
   }, [props.roomName]);
 
-  const handlePreJoinSubmit = React.useCallback(async (values: LocalUserChoices) => {
-    setPreJoinChoices(values);
-    const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
-    url.searchParams.append('roomName', props.roomName);
-    url.searchParams.append('participantName', values.username);
-    if (props.region) {
-      url.searchParams.append('region', props.region);
-    }
-    const connectionDetailsResp = await fetch(url.toString());
-    const connectionDetailsData = await connectionDetailsResp.json();
-    setConnectionDetails(connectionDetailsData);
-  }, []);
-  const handlePreJoinError = React.useCallback((e: any) => console.error(e), []);
+  if (connectionDetails === undefined || preJoinChoices === undefined) {
+    return (
+      <main data-lk-theme="default" style={{ height: '100%' }}>
+        {launchState === 'invalid' ? <InvalidLaunch /> : null}
+      </main>
+    );
+  }
 
   return (
     <main data-lk-theme="default" style={{ height: '100%' }}>
-      {connectionDetails === undefined || preJoinChoices === undefined ? (
-        // Wait until the launch-fragment check has run so a gateway launch
-        // doesn't briefly flash the PreJoin screen before auto-joining.
-        launchChecked ? (
-          <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
-            <PreJoin
-              defaults={preJoinDefaults}
-              onSubmit={handlePreJoinSubmit}
-              onError={handlePreJoinError}
-            />
-          </div>
-        ) : null
-      ) : (
-        <VideoConferenceComponent
-          connectionDetails={connectionDetails}
-          userChoices={preJoinChoices}
-          options={{
-            codec: props.codec,
-            hq: props.hq,
-            singlePeerConnection: props.singlePeerConnection,
-          }}
-        />
-      )}
+      <VideoConferenceComponent
+        connectionDetails={connectionDetails}
+        userChoices={preJoinChoices}
+        returnUrl={launch?.returnUrl}
+        hostToken={launch?.hostToken}
+        hostCallback={launch?.hostCallback}
+        options={{
+          codec: props.codec,
+          hq: props.hq,
+          singlePeerConnection: props.singlePeerConnection,
+        }}
+      />
     </main>
+  );
+}
+
+function InvalidLaunch() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '1rem',
+        height: '100%',
+        padding: '2rem',
+        textAlign: 'center',
+      }}
+    >
+      <img
+        src="/images/accredit-mark.svg"
+        alt="Accredit"
+        width="64"
+        height="64"
+        style={{ filter: 'brightness(0) invert(1)', opacity: 0.92 }}
+      />
+      <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, color: '#f1f5f9' }}>
+        This meeting link isn&rsquo;t valid
+      </h1>
+      <p style={{ margin: 0, maxWidth: '28rem', lineHeight: 1.6, color: 'rgba(241,245,249,0.6)' }}>
+        The link may have expired or been opened directly. Please rejoin the session from your
+        Accredit course or event.
+      </p>
+    </div>
   );
 }
 
 function VideoConferenceComponent(props: {
   userChoices: LocalUserChoices;
   connectionDetails: ConnectionDetails;
+  returnUrl?: string;
+  hostToken?: string;
+  hostCallback?: string;
   options: {
     hq: boolean;
     codec: VideoCodec;
@@ -201,6 +225,27 @@ function VideoConferenceComponent(props: {
     };
   }, []);
 
+  const router = useRouter();
+  const handleOnLeave = React.useCallback(() => {
+    // Return the user to the launching course/event when the gateway provided a
+    // return_url; otherwise fall back to the branded landing.
+    if (props.returnUrl) {
+      window.location.href = props.returnUrl;
+    } else {
+      router.push('/');
+    }
+  }, [router, props.returnUrl]);
+  const handleError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
+  }, []);
+  const handleEncryptionError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(
+      `Encountered an unexpected encryption error, check the console logs for details: ${error.message}`,
+    );
+  }, []);
+
   React.useEffect(() => {
     room.on(RoomEvent.Disconnected, handleOnLeave);
     room.on(RoomEvent.EncryptionError, handleEncryptionError);
@@ -232,28 +277,17 @@ function VideoConferenceComponent(props: {
       room.off(RoomEvent.EncryptionError, handleEncryptionError);
       room.off(RoomEvent.MediaDevicesError, handleError);
     };
-  }, [e2eeSetupComplete, room, props.connectionDetails, props.userChoices]);
+  }, [e2eeSetupComplete, room, props.connectionDetails, props.userChoices, handleOnLeave]);
 
   const lowPowerMode = useLowCPUOptimizer(room);
-
-  const router = useRouter();
-  const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
-  const handleError = React.useCallback((error: Error) => {
-    console.error(error);
-    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
-  }, []);
-  const handleEncryptionError = React.useCallback((error: Error) => {
-    console.error(error);
-    alert(
-      `Encountered an unexpected encryption error, check the console logs for details: ${error.message}`,
-    );
-  }, []);
 
   React.useEffect(() => {
     if (lowPowerMode) {
       console.warn('Low power mode enabled');
     }
   }, [lowPowerMode]);
+
+  const isHost = !!(props.hostToken && props.hostCallback);
 
   return (
     <div className="lk-room-container">
@@ -263,6 +297,9 @@ function VideoConferenceComponent(props: {
           chatMessageFormatter={formatChatMessageLinks}
           SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
         />
+        {isHost && (
+          <HostControls hostToken={props.hostToken!} hostCallback={props.hostCallback!} />
+        )}
         <DebugMode />
         <RecordingIndicator />
       </RoomContext.Provider>

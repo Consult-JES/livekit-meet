@@ -38,3 +38,35 @@
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 0.5rem;
 }
+
+.landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  max-width: 30rem;
+  padding-inline: 2rem;
+  text-align: center;
+}
+
+.landingMark {
+  display: block;
+  /* render the indigo mark as a soft white-on-dark glyph */
+  filter: brightness(0) invert(1);
+  opacity: 0.92;
+}
+
+.landingTitle {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #f1f5f9;
+}
+
+.landingText {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: rgba(241, 245, 249, 0.6);
+}
