@@ -36,3 +36,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# Next.js regenerates this on build — keep it untracked so deploy tags stay clean
+/next-env.d.ts
